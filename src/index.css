@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 4%;
+    --foreground: 180 100% 95%;
+
+    --card: 220 20% 7%;
+    --card-foreground: 180 100% 95%;
+
+    --popover: 220 20% 7%;
+    --popover-foreground: 180 100% 95%;
+
+    --primary: 160 100% 50%;
+    --primary-foreground: 220 20% 4%;
+
+    --secondary: 220 20% 12%;
+    --secondary-foreground: 180 100% 90%;
+
+    --muted: 220 15% 15%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 280 100% 65%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 85% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 20% 15%;
+    --input: 220 20% 12%;
+    --ring: 160 100% 50%;
+
+    --radius: 0.75rem;
+
+    --neon-glow: 160 100% 50%;
+    --neon-purple: 280 100% 65%;
+    --neon-blue: 200 100% 60%;
+    --neon-orange: 25 100% 55%;
+    --surface-glass: 220 20% 8%;
+
+    --sidebar-background: 220 20% 6%;
+    --sidebar-foreground: 180 100% 90%;
+    --sidebar-primary: 160 100% 50%;
+    --sidebar-primary-foreground: 220 20% 4%;
+    --sidebar-accent: 220 20% 12%;
+    --sidebar-accent-foreground: 180 100% 90%;
+    --sidebar-border: 220 20% 15%;
+    --sidebar-ring: 160 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-card/60 backdrop-blur-xl border border-border/50 rounded-lg;
+  }
+
+  .neon-border {
+    @apply border border-primary/30;
+    box-shadow: 0 0 15px hsl(var(--primary) / 0.1), inset 0 0 15px hsl(var(--primary) / 0.05);
+  }
+
+  .neon-glow {
+    text-shadow: 0 0 10px hsl(var(--primary) / 0.8), 0 0 40px hsl(var(--primary) / 0.4);
+  }
+
+  .neon-glow-purple {
+    text-shadow: 0 0 10px hsl(var(--neon-purple) / 0.8), 0 0 40px hsl(var(--neon-purple) / 0.4);
+  }
+
+  .neon-box-glow {
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3), 0 0 60px hsl(var(--primary) / 0.1);
+  }
+
+  .grid-bg {
+    background-image: 
+      linear-gradient(hsl(var(--border) / 0.3) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.3) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .scanline {
+    background: linear-gradient(
+      transparent 50%,
+      hsl(var(--primary) / 0.02) 50%
+    );
+    background-size: 100% 4px;
+    pointer-events: none;
+  }
+}
+
+@layer utilities {
+  .text-gradient-neon {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--neon-blue)));
+  }
+
+  .text-gradient-fire {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--neon-orange)), hsl(var(--destructive)));
+  }
+
+  .animate-pulse-neon {
+    animation: pulse-neon 2s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse-neon {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes glitch {
+  0% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(2px, -2px); }
+  60% { transform: translate(-1px, -1px); }
+  80% { transform: translate(1px, 1px); }
+  100% { transform: translate(0); }
+}
+
+.animate-glitch {
+  animation: glitch 0.3s ease-in-out;
+}
