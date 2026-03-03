@@ -86,6 +86,13 @@ const AdminDashboard = () => {
     setTeamError(null);
     setTeamSuccess(null);
     
+    // First delete related records from child tables to avoid foreign key constraint violation
+    await supabase.from('submissions').delete().eq('team_id', teamId);
+    await supabase.from('qualified_teams').delete().eq('team_id', teamId);
+    await supabase.from('round3_submissions').delete().eq('team_id', teamId);
+    await supabase.from('activity_logs').delete().eq('team_id', teamId);
+    
+    // Now delete the team
     const { error } = await supabase.from('teams').delete().eq('team_id', teamId);
     if (error) {
       console.error('Error deleting team:', error);
