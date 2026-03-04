@@ -93,7 +93,7 @@ const Index = () => {
             The Prompters
           </h1>
           <p className="font-mono text-sm text-muted-foreground mt-3 tracking-wider">
-            HACKATHON COMPETITION // 220 TEAMS
+            Enter your Team ID and Leader Name to join the competition. 
           </p>
         </div>
 
