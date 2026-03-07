@@ -67,6 +67,14 @@ export function useTeamAccessControl(
     try {
       console.log('[AccessControl] Checking status for:', teamId);
 
+      // IMMEDIATELY clear qualified status when round is in countdown
+      // This fixes the issue where qualified overlay shows after admin starts next round
+      if (roundStatus === 'countdown') {
+        console.log('[AccessControl] Round in countdown - clearing qualified status immediately');
+        setState(s => ({ ...s, isQualified: false, qualificationRound: null }));
+        return;
+      }
+
       // STEP 1: Check disqualification (highest priority)
       const { data: teamData } = await supabase
         .from('teams')
