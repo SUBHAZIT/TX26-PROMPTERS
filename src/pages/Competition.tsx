@@ -39,130 +39,202 @@ const Competition = () => {
     if (!session) navigate('/');
   }, [session, navigate]);
 
-  // Fetch warning count
+  // Initial fetch of team status
   useEffect(() => {
     if (!session) return;
-    const fetchWarnings = async () => {
+    
+    const fetchTeamStatus = async () => {
       const { data } = await supabase.from('teams').select('warning_count, status').eq('team_id', session.teamId).maybeSingle();
       if (data) {
         setWarningCount(data.warning_count);
         setTeamStatus(data.status);
-        // Check if disqualified
         if (data.status === 'disqualified') {
           setIsDisqualified(true);
         }
       }
     };
-    fetchWarnings();
-    
-    // Subscribe to team status changes (disqualification, warnings)
-    const channel = supabase
-      .channel('team_status_changes')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `team_id=eq.${session.teamId}` }, (payload: any) => {
-        setWarningCount(payload.new.warning_count);
-        setTeamStatus(payload.new.status);
-        // Check if disqualified
-        if (payload.new.status === 'disqualified') {
-          setIsDisqualified(true);
-        } else {
-          setIsDisqualified(false);
-        }
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    fetchTeamStatus();
   }, [session]);
+
+  // ============================================================
+  // REAL-TIME SUBSCRIPTIONS FOR DISQUALIFICATION & ELIMINATION
+  // ============================================================
+  
+  useEffect(() => {
+    if (!session) return;
+    
+    let isMounted = true;
+    const teamId = session.teamId;
+
+    // Function to check and update disqualification status
+    const checkDisqualificationStatus = async () => {
+      if (!isMounted) return;
+      
+      const { data: teamData } = await supabase
+        .from('teams')
+        .select('status')
+        .eq('team_id', teamId)
+        .maybeSingle();
+      
+      if (!isMounted) return;
+      
+      if (teamData?.status === 'disqualified') {
+        setIsDisqualified(true);
+        setEliminationState(null); // Clear elimination state to show disqualification overlay
+      } else {
+        setIsDisqualified(false);
+      }
+    };
+
+    // Function to check and update elimination/qualification status
+    const checkEliminationStatus = async () => {
+      if (!isMounted) return;
+      
+      // First check if disqualified
+      const { data: teamData } = await supabase
+        .from('teams')
+        .select('status')
+        .eq('team_id', teamId)
+        .maybeSingle();
+      
+      if (!isMounted) return;
+      
+      if (teamData?.status === 'disqualified') {
+        setIsDisqualified(true);
+        return;
+      }
+      
+      setIsDisqualified(false);
+      
+      // Get current rounds state
+      const completedRounds = rounds.filter(r => r.status === 'completed');
+      if (completedRounds.length === 0) return;
+
+      const lastCompleted = completedRounds[completedRounds.length - 1];
+      const nextRound = rounds.find(r => r.round_number === lastCompleted.round_number + 1);
+      
+      // Only show elimination if next round is pending (not started yet)
+      if (!nextRound || nextRound.status === 'pending') {
+        const { data: qualified } = await supabase
+          .from('qualified_teams')
+          .select('*')
+          .eq('team_id', teamId)
+          .eq('qualified_from_round', lastCompleted.round_number)
+          .maybeSingle();
+
+        if (!isMounted) return;
+        
+        if (qualified) {
+          setEliminationState({ eliminated: false, qualified: true, round: lastCompleted.round_number });
+        } else {
+          // Check if there are any qualified teams (to confirm round was evaluated)
+          const { data: anyQualified } = await supabase
+            .from('qualified_teams')
+            .select('id')
+            .eq('qualified_from_round', lastCompleted.round_number)
+            .limit(1);
+            
+          if (!isMounted) return;
+            
+          if (anyQualified && anyQualified.length > 0) {
+            setEliminationState({ eliminated: true, qualified: false, round: lastCompleted.round_number });
+          }
+        }
+      }
+    };
+
+    // ============================================================
+    // CHANNEL 1: Subscribe to teams table for disqualification
+    // ============================================================
+    const teamsChannel = supabase
+      .channel('competition_teams_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'teams',
+          filter: `team_id=eq.${teamId}`
+        },
+        (payload) => {
+          console.log('[Realtime] Teams table updated:', payload.new);
+          if (payload.new.status === 'disqualified') {
+            setIsDisqualified(true);
+            setEliminationState(null);
+          } else {
+            setIsDisqualified(false);
+            // Re-check elimination status when team is re-qualified
+            checkEliminationStatus();
+          }
+          setWarningCount(payload.new.warning_count || 0);
+          setTeamStatus(payload.new.status);
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Teams channel status:', status);
+      });
+
+    // ============================================================
+    // CHANNEL 2: Subscribe to qualified_teams table for elimination/qualification
+    // ============================================================
+    const qualifiedTeamsChannel = supabase
+      .channel('competition_qualified_teams_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'qualified_teams'
+        },
+        (payload) => {
+          console.log('[Realtime] Qualified teams changed:', payload);
+          // Check if this change affects the current team
+          checkEliminationStatus();
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Qualified teams channel status:', status);
+      });
+
+    // ============================================================
+    // CHANNEL 3: Subscribe to round_state for round completion
+    // ============================================================
+    const roundStateChannel = supabase
+      .channel('competition_round_state_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'round_state'
+        },
+        (payload) => {
+          console.log('[Realtime] Round state changed:', payload);
+          checkEliminationStatus();
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Round state channel status:', status);
+      });
+
+    // Cleanup all channels on unmount
+    return () => {
+      isMounted = false;
+      console.log('[Realtime] Cleaning up subscriptions');
+      supabase.removeChannel(teamsChannel);
+      supabase.removeChannel(qualifiedTeamsChannel);
+      supabase.removeChannel(roundStateChannel);
+    };
+  }, [session, rounds]);
+
+  // ============================================================
+  // END REAL-TIME SUBSCRIPTIONS
+  // ============================================================
 
   const handleIntroEnd = useCallback(() => {
     setShowIntro(false);
     play();
   }, [play]);
-
-  // Real-time subscription for qualified_teams changes - auto refresh elimination status
-  useEffect(() => {
-    if (!session) return;
-    
-    const channel = supabase
-      .channel('competition_qualified_teams')
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'qualified_teams' 
-      }, () => {
-        // Refetch elimination status when qualified_teams changes
-        checkEliminationStatus();
-      })
-      .subscribe();
-
-    // Also subscribe to round_state changes for auto-refresh
-    const roundChannel = supabase
-      .channel('competition_round_state')
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'round_state' 
-      }, () => {
-        // Refetch elimination status when round state changes
-        checkEliminationStatus();
-      })
-      .subscribe();
-
-    return () => { 
-      supabase.removeChannel(channel);
-      supabase.removeChannel(roundChannel);
-    };
-  }, [session]);
-
-  // Check elimination status function - extracted for reusability
-  const checkEliminationStatus = useCallback(async () => {
-    if (!session) return;
-    
-    // First check if team is disqualified
-    const { data: teamData } = await supabase.from('teams')
-      .select('status')
-      .eq('team_id', session.teamId)
-      .maybeSingle();
-    
-    if (teamData?.status === 'disqualified') {
-      setIsDisqualified(true);
-      return;
-    }
-    
-    setIsDisqualified(false);
-    
-    const completedRounds = rounds.filter(r => r.status === 'completed');
-    if (completedRounds.length === 0) return;
-
-    const lastCompleted = completedRounds[completedRounds.length - 1];
-    const nextRound = rounds.find(r => r.round_number === lastCompleted.round_number + 1);
-    
-    // Only show elimination if next round is pending (not started yet)
-    if (!nextRound || nextRound.status === 'pending') {
-      const { data: qualified } = await supabase.from('qualified_teams')
-        .select('*')
-        .eq('team_id', session.teamId)
-        .eq('qualified_from_round', lastCompleted.round_number)
-        .maybeSingle();
-
-      if (qualified) {
-        setEliminationState({ eliminated: false, qualified: true, round: lastCompleted.round_number });
-      } else {
-        // Check if there are any qualified teams (to confirm round was evaluated)
-        const { data: anyQualified } = await supabase.from('qualified_teams')
-          .select('id')
-          .eq('qualified_from_round', lastCompleted.round_number)
-          .limit(1);
-          
-        if (anyQualified && anyQualified.length > 0) {
-          setEliminationState({ eliminated: true, qualified: false, round: lastCompleted.round_number });
-        }
-      }
-    }
-  }, [session, rounds]);
-
-  // Check elimination status when rounds complete
-  useEffect(() => {
-    checkEliminationStatus();
-  }, [rounds, checkEliminationStatus]);
 
   // Clear elimination when new round starts
   useEffect(() => {
@@ -219,14 +291,29 @@ const Competition = () => {
     );
   }
 
-  // Show elimination overlay
+  // ============================================================
+  // CONDITIONAL OVERLAYS - Render at top level for instant display
+  // ============================================================
+  
+  // Show disqualification overlay immediately when isDisqualified is true
   if (isDisqualified) {
     return <DisqualificationOverlay teamId={session.teamId} />;
   }
 
+  // Show elimination/qualification overlay when eliminationState is set
   if (eliminationState) {
-    return <EliminationOverlay isEliminated={eliminationState.eliminated} isQualified={eliminationState.qualified} roundNumber={eliminationState.round} />;
+    return (
+      <EliminationOverlay 
+        isEliminated={eliminationState.eliminated} 
+        isQualified={eliminationState.qualified} 
+        roundNumber={eliminationState.round} 
+      />
+    );
   }
+
+  // ============================================================
+  // MAIN COMPETITION UI
+  // ============================================================
 
   return (
     <div className="min-h-screen relative">
@@ -290,3 +377,4 @@ const Competition = () => {
 };
 
 export default Competition;
+
