@@ -172,8 +172,13 @@ const AdminDashboard = () => {
   };
 
   const disqualifyTeam = async (teamId: string) => {
+    // First remove from qualified_teams if present
+    await supabase.from('qualified_teams').delete().eq('team_id', teamId);
+    // Update team status
     await supabase.from('teams').update({ status: 'disqualified', suspicious_flag: true }).eq('team_id', teamId);
+    setTeamSuccess(`Team ${teamId} has been disqualified and removed from all rounds!`);
     fetchAll();
+    setTimeout(() => setTeamSuccess(null), 5000);
   };
 
   const requalifyTeam = async (teamId: string) => {

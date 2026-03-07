@@ -9,6 +9,7 @@ import { useBackgroundMusic } from '@/hooks/useBackgroundMusic';
 import { CountdownOverlay } from '@/components/competition/CountdownOverlay';
 import { WaitingScreen } from '@/components/competition/WaitingScreen';
 import { EliminationOverlay } from '@/components/competition/EliminationOverlay';
+import { DisqualificationOverlay } from '@/components/competition/DisqualificationOverlay';
 import { IntroVideo } from '@/components/competition/IntroVideo';
 import { MuteButton } from '@/components/competition/MuteButton';
 import { WarningNotice } from '@/components/competition/WarningNotice';
@@ -31,6 +32,8 @@ const Competition = () => {
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
   const [eliminationState, setEliminationState] = useState<{ eliminated: boolean; qualified: boolean; round: number } | null>(null);
   const [warningCount, setWarningCount] = useState(0);
+  const [teamStatus, setTeamStatus] = useState<string | null>(null);
+  const [isDisqualified, setIsDisqualified] = useState(false);
 
   useEffect(() => {
     if (!session) navigate('/');
@@ -40,14 +43,30 @@ const Competition = () => {
   useEffect(() => {
     if (!session) return;
     const fetchWarnings = async () => {
-      const { data } = await supabase.from('teams').select('warning_count').eq('team_id', session.teamId).maybeSingle();
-      if (data) setWarningCount(data.warning_count);
+      const { data } = await supabase.from('teams').select('warning_count, status').eq('team_id', session.teamId).maybeSingle();
+      if (data) {
+        setWarningCount(data.warning_count);
+        setTeamStatus(data.status);
+        // Check if disqualified
+        if (data.status === 'disqualified') {
+          setIsDisqualified(true);
+        }
+      }
     };
     fetchWarnings();
+    
+    // Subscribe to team status changes (disqualification, warnings)
     const channel = supabase
-      .channel('team_warnings')
+      .channel('team_status_changes')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `team_id=eq.${session.teamId}` }, (payload: any) => {
         setWarningCount(payload.new.warning_count);
+        setTeamStatus(payload.new.status);
+        // Check if disqualified
+        if (payload.new.status === 'disqualified') {
+          setIsDisqualified(true);
+        } else {
+          setIsDisqualified(false);
+        }
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -74,12 +93,41 @@ const Competition = () => {
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    // Also subscribe to round_state changes for auto-refresh
+    const roundChannel = supabase
+      .channel('competition_round_state')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'round_state' 
+      }, () => {
+        // Refetch elimination status when round state changes
+        checkEliminationStatus();
+      })
+      .subscribe();
+
+    return () => { 
+      supabase.removeChannel(channel);
+      supabase.removeChannel(roundChannel);
+    };
   }, [session]);
 
   // Check elimination status function - extracted for reusability
   const checkEliminationStatus = useCallback(async () => {
     if (!session) return;
+    
+    // First check if team is disqualified
+    const { data: teamData } = await supabase.from('teams')
+      .select('status')
+      .eq('team_id', session.teamId)
+      .maybeSingle();
+    
+    if (teamData?.status === 'disqualified') {
+      setIsDisqualified(true);
+      return;
+    }
+    
+    setIsDisqualified(false);
     
     const completedRounds = rounds.filter(r => r.status === 'completed');
     if (completedRounds.length === 0) return;
@@ -172,6 +220,10 @@ const Competition = () => {
   }
 
   // Show elimination overlay
+  if (isDisqualified) {
+    return <DisqualificationOverlay teamId={session.teamId} />;
+  }
+
   if (eliminationState) {
     return <EliminationOverlay isEliminated={eliminationState.eliminated} isQualified={eliminationState.qualified} roundNumber={eliminationState.round} />;
   }
