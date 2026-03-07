@@ -1,15 +1,22 @@
-# Competition Bug Fix - Eliminated/Disqualified Players Access
+# TODO - State-Based Access Control System
 
-## Task
-Fix bug where eliminated or disqualified players can see and play next rounds.
+## Task: Implement strict state-based access control for competition players
 
-## Steps to Complete
+### Steps:
 
-- [x] 1. Add explicit `isEliminated` boolean state to track elimination status
-- [x] 2. Create useEffect hook for qualified_teams realtime subscription that checks against round_state.current_round
-- [x] 3. Implement state priority in return statement (Disqualified → Eliminated → Rounds)
-- [x] 4. Add explicit logic gate to wrap Round components with !isEliminated && !isDisqualified checks
-- [x] 5. Add `isQualified` state to show "Qualified!" message in real-time
+- [x] 1. Analyze codebase and understand existing structure
+- [x] 2. Create `useTeamAccessControl` hook with:
+  - [x] State tracking: isDisqualified, isEliminated, isQualified
+  - [x] Real-time subscriptions on teams, qualified_teams, round_state tables
+  - [x] Permanent elimination logic (once eliminated, always eliminated)
+  - [x] Re-qualification logic when disqualification is lifted
+- [x] 3. Update Competition.tsx to use the new hook
+- [x] 4. Verify logic gate wraps Round components correctly
+- [x] 5. Verify priority order: Disqualified > Eliminated > Qualified > Active
 
-## Status: Completed
+### Key Requirements:
+- Disqualified: Show DisqualificationOverlay, re-qualify if admin sets back to false
+- Eliminated: PERMANENT - once true, never re-enter
+- Qualified: Show "Qualified!" success until next round starts
+- Priority: Disqualified (Highest) → Eliminated → Qualified → Active Play
 
