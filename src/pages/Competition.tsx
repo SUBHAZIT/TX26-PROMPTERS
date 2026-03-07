@@ -34,6 +34,8 @@ const Competition = () => {
   const [teamStatus, setTeamStatus] = useState<string | null>(null);
   const [isDisqualified, setIsDisqualified] = useState(false);
   const [isEliminated, setIsEliminated] = useState(false);
+  const [isQualified, setIsQualified] = useState(false);
+  const [qualificationRound, setQualificationRound] = useState<number | null>(null);
 
   useEffect(() => {
     if (!session) navigate('/');
@@ -61,7 +63,7 @@ const Competition = () => {
   // ============================================================
 
   // Dedicated useEffect for qualified_teams realtime subscription
-  // This directly checks against round_state.current_round for instant elimination
+  // This directly checks against round_state.current_round for instant elimination/qualification
   useEffect(() => {
     if (!session) return;
     
@@ -83,6 +85,8 @@ const Competition = () => {
       if (teamData?.status === 'disqualified') {
         setIsDisqualified(true);
         setIsEliminated(false);
+        setIsQualified(false);
+        setQualificationRound(null);
         return;
       }
       
@@ -100,6 +104,8 @@ const Competition = () => {
       // If there's no valid round state, don't set elimination
       if (!roundStateData) {
         setIsEliminated(false);
+        setIsQualified(false);
+        setQualificationRound(null);
         return;
       }
       
@@ -119,8 +125,12 @@ const Competition = () => {
         
         if (!isMounted) return;
         
-        // If not qualified for this round, set isEliminated to true
-        if (!qualifiedData) {
+        // If qualified for this round
+        if (qualifiedData) {
+          setIsEliminated(false);
+          setIsQualified(true);
+          setQualificationRound(previousRound);
+        } else {
           // Check if any teams were qualified (to confirm round was evaluated)
           const { data: anyQualified } = await supabase
             .from('qualified_teams')
@@ -133,13 +143,20 @@ const Competition = () => {
           // Only set eliminated if there are qualified teams (round was evaluated)
           if (anyQualified && anyQualified.length > 0) {
             setIsEliminated(true);
+            setIsQualified(false);
+            setQualificationRound(previousRound);
+          } else {
+            // Round not yet evaluated - don't show any overlay
+            setIsEliminated(false);
+            setIsQualified(false);
+            setQualificationRound(null);
           }
-        } else {
-          setIsEliminated(false);
         }
       } else {
-        // Round 1 - reset elimination
+        // Round 1 - reset elimination/qualification states
         setIsEliminated(false);
+        setIsQualified(false);
+        setQualificationRound(null);
       }
     };
 
@@ -212,6 +229,8 @@ const Competition = () => {
       if (teamData?.status === 'disqualified') {
         setIsDisqualified(true);
         setIsEliminated(false);
+        setIsQualified(false);
+        setQualificationRound(null);
       } else {
         setIsDisqualified(false);
       }
@@ -234,6 +253,8 @@ const Competition = () => {
           if (payload.new.status === 'disqualified') {
             setIsDisqualified(true);
             setIsEliminated(false);
+            setIsQualified(false);
+            setQualificationRound(null);
           } else {
             setIsDisqualified(false);
           }
@@ -260,10 +281,12 @@ const Competition = () => {
     play();
   }, [play]);
 
-  // Clear elimination when new round starts
+  // Clear elimination/qualification when new round starts
   useEffect(() => {
     if (activeRound?.status === 'countdown' || activeRound?.status === 'active') {
       setIsEliminated(false);
+      setIsQualified(false);
+      setQualificationRound(null);
     }
   }, [activeRound?.status]);
 
@@ -324,15 +347,14 @@ const Competition = () => {
     return <DisqualificationOverlay teamId={session.teamId} />;
   }
 
-  // ELIMINATION LOCK: Eliminated check second - blocks round components
-  if (isEliminated) {
-    // Get current round to display in overlay
-    const currentRound = rounds.find(r => r.status === 'active' || r.status === 'countdown');
+  // ELIMINATION/QUALIFICATION LOCK: Show overlay when either is set
+  // This blocks round components from rendering
+  if (isEliminated || isQualified) {
     return (
       <EliminationOverlay 
-        isEliminated={true} 
-        isQualified={false} 
-        roundNumber={currentRound?.round_number || 1} 
+        isEliminated={isEliminated} 
+        isQualified={isQualified} 
+        roundNumber={qualificationRound || 1} 
       />
     );
   }

@@ -9,6 +9,7 @@ Fix bug where eliminated or disqualified players can see and play next rounds.
 - [x] 2. Create useEffect hook for qualified_teams realtime subscription that checks against round_state.current_round
 - [x] 3. Implement state priority in return statement (Disqualified → Eliminated → Rounds)
 - [x] 4. Add explicit logic gate to wrap Round components with !isEliminated && !isDisqualified checks
+- [x] 5. Add `isQualified` state to show "Qualified!" message in real-time
 
 ## Status: Completed
 
