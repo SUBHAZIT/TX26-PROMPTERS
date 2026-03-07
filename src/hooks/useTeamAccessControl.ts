@@ -48,6 +48,10 @@ export function useTeamAccessControl(
   // Track previous round status to detect transitions
   const prevRoundStatusRef = useRef<string | null>(null);
 
+  // Use ref to track current roundStatus for use in checkTeamStatus callback
+  const roundStatusRef = useRef(roundStatus);
+  roundStatusRef.current = roundStatus;
+
   /**
    * Check team status against database
    */
@@ -69,7 +73,7 @@ export function useTeamAccessControl(
 
       // IMMEDIATELY clear qualified status when round is in countdown
       // This fixes the issue where qualified overlay shows after admin starts next round
-      if (roundStatus === 'countdown') {
+      if (roundStatusRef.current === 'countdown') {
         console.log('[AccessControl] Round in countdown - clearing qualified status immediately');
         setState(s => ({ ...s, isQualified: false, qualificationRound: null }));
         return;
@@ -194,6 +198,14 @@ export function useTeamAccessControl(
         (payload) => {
           if (!mounted) return;
           console.log('[AccessControl] qualified_teams REAL-TIME update:', payload);
+          
+          // If round is already in countdown, don't re-check qualified status
+          // This prevents the qualified overlay from reappearing after being cleared
+          if (roundStatusRef.current === 'countdown') {
+            console.log('[AccessControl] Round in countdown - skipping qualified check');
+            return;
+          }
+          
           // IMMEDIATELY check status - no waiting!
           checkTeamStatus();
         }
@@ -211,6 +223,14 @@ export function useTeamAccessControl(
         (payload) => {
           if (!mounted) return;
           console.log('[AccessControl] Round state changed:', payload);
+          
+          // If round is already in countdown, don't re-check qualified status
+          // This prevents the qualified overlay from reappearing after being cleared
+          if (roundStatusRef.current === 'countdown') {
+            console.log('[AccessControl] Round in countdown - skipping qualified check');
+            return;
+          }
+          
           checkTeamStatus();
         }
       )
