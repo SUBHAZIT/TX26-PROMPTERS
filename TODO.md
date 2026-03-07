@@ -10,6 +10,8 @@
   - [x] Real-time subscriptions on teams, qualified_teams, round_state tables
   - [x] Permanent elimination logic (once eliminated, always eliminated)
   - [x] Re-qualification logic when disqualification is lifted
+  - [x] Real-time triggers - NO page refresh needed
+  - [x] Proper qualified overlay timing (shows until round becomes active)
 - [x] 3. Update Competition.tsx to use the new hook
 - [x] 4. Verify logic gate wraps Round components correctly
 - [x] 5. Verify priority order: Disqualified > Eliminated > Qualified > Active
@@ -19,4 +21,9 @@
 - Eliminated: PERMANENT - once true, never re-enter
 - Qualified: Show "Qualified!" success until next round starts
 - Priority: Disqualified (Highest) → Eliminated → Qualified → Active Play
+
+### Issues Fixed:
+1. Real-time now works - qualified_teams subscription triggers immediately
+2. Timer flash fixed - qualified overlay shows until round goes from countdown → active
+3. Permanent elimination persists across page refreshes via localStorage
 

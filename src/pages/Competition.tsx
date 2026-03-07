@@ -38,7 +38,7 @@ const Competition = () => {
     qualificationRound,
     clearQualifiedStatus,
     isLoading: accessLoading
-  } = useTeamAccessControl(session);
+  } = useTeamAccessControl(session, activeRound?.status);
   
   useAntiCheat();
   const { isMuted, toggleMute, play } = useBackgroundMusic();
@@ -76,15 +76,6 @@ const Competition = () => {
     setShowIntro(false);
     play();
   }, [play]);
-
-  // Clear qualified status when new round starts (but NOT elimination - that's permanent!)
-  useEffect(() => {
-    if (activeRound?.status === 'countdown' || activeRound?.status === 'active') {
-      // Clear qualified status when round actually starts
-      // Note: isEliminated stays true permanently - this is intentional!
-      clearQualifiedStatus();
-    }
-  }, [activeRound?.status, clearQualifiedStatus]);
 
   // Show countdown when round enters countdown status
   useEffect(() => {
