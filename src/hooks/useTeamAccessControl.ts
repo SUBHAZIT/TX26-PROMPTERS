@@ -20,17 +20,14 @@ interface TeamSession {
 /**
  * useTeamAccessControl - Custom hook for state-based access control
  * 
- * Tracks three main statuses for a team:
- * - isDisqualified: If team is disqualified by admin
- * - isEliminated: PERMANENT - once eliminated, cannot re-enter
- * - isQualified: If team qualified for current round
+ * Logic Flow:
+ * 1. Check if team is disqualified (blocks everything)
+ * 2. Check if team was permanently eliminated
+ * 3. Check if team is in qualified_teams for the most recent evaluated round
+ * 4. If in qualified_teams → show "Qualified!" overlay
+ * 5. If NOT in qualified_teams but round was evaluated → show "Eliminated" overlay
  * 
- * Priority: Disqualified (Highest) > Eliminated > Qualified > Active Play
- * 
- * Key Logic:
- * - When admin selects TOP teams (adds to qualified_teams), those teams see "Qualified!" overlay
- * - ALL OTHER teams see "Eliminated" overlay immediately after selection
- * - Eliminated teams are PERMANENTLY blocked from the competition
+ * Priority: Disqualified > Eliminated > Qualified > Active
  */
 export function useTeamAccessControl(session: TeamSession | null) {
   const [state, setState] = useState<TeamAccessState>({
@@ -42,18 +39,18 @@ export function useTeamAccessControl(session: TeamSession | null) {
     error: null,
   });
 
-  // Use refs to track if elimination has been set (for permanent elimination)
+  // Track permanent elimination
   const eliminationRef = useRef<{ eliminated: boolean; round: number | null }>({
     eliminated: false,
     round: null,
   });
 
-  // Use ref to track current round for change detection
-  const previousRoundRef = useRef<number | null>(null);
+  // Track if initial check is done
+  const isInitialCheckDone = useRef(false);
 
   /**
-   * Check and update team status based on current database state
-   * This is the main logic that determines Qualified vs Eliminated
+   * Core logic to check team status against database
+   * This compares teamId against qualified_teams table
    */
   const checkTeamStatus = useCallback(async () => {
     if (!session) return;
@@ -69,7 +66,9 @@ export function useTeamAccessControl(session: TeamSession | null) {
     };
 
     try {
-      // Step 1: Check if team is disqualified (HIGHEST PRIORITY)
+      console.log('[AccessControl] Checking status for team:', teamId);
+
+      // STEP 1: Check if disqualified (HIGHEST PRIORITY)
       const { data: teamData, error: teamError } = await supabase
         .from('teams')
         .select('status')
@@ -77,128 +76,96 @@ export function useTeamAccessControl(session: TeamSession | null) {
         .maybeSingle();
 
       if (teamError) {
-        console.error('[AccessControl] Error fetching team status:', teamError);
-        currentState.error = teamError.message;
+        console.error('[AccessControl] Error fetching team:', teamError);
       }
 
       if (teamData?.status === 'disqualified') {
+        console.log('[AccessControl] Team IS disqualified');
         currentState.isDisqualified = true;
-        currentState.isEliminated = false;
-        currentState.isQualified = false;
-        currentState.qualificationRound = null;
-        
         setState(currentState);
         return;
       }
 
-      // Step 2: Check if team was PERMANENTLY eliminated
-      // Once eliminated, they stay eliminated PERMANENTLY
+      // STEP 2: Check if permanently eliminated (from localStorage)
       if (eliminationRef.current.eliminated) {
+        console.log('[AccessControl] Team is PERMANENTLY eliminated from round', eliminationRef.current.round);
+        currentState.isEliminated = true;
+        currentState.qualificationRound = eliminationRef.current.round;
+        setState(currentState);
+        return;
+      }
+
+      // STEP 3: Get the LATEST round that has been evaluated
+      // We look for qualified_teams entries to find the highest evaluated round
+      const { data: qualifiedTeamsData, error: qError } = await supabase
+        .from('qualified_teams')
+        .select('qualified_from_round')
+        .eq('team_id', teamId)
+        .order('qualified_from_round', { ascending: false })
+        .limit(1);
+
+      if (qError) {
+        console.error('[AccessControl] Error fetching qualified teams:', qError);
+      }
+
+      // Check if THIS team is in qualified_teams
+      if (qualifiedTeamsData && qualifiedTeamsData.length > 0) {
+        // Team IS qualified for the latest evaluated round
+        const qualifiedRound = qualifiedTeamsData[0].qualified_from_round;
+        console.log('[AccessControl] Team qualified for round:', qualifiedRound);
+        
+        currentState.isQualified = true;
+        currentState.isEliminated = false;
+        currentState.qualificationRound = qualifiedRound;
+        setState(currentState);
+        return;
+      }
+
+      // STEP 4: Team is NOT in qualified_teams
+      // Check if ANY teams have been qualified for any round (round was evaluated)
+      const { data: anyQualified } = await supabase
+        .from('qualified_teams')
+        .select('qualified_from_round')
+        .order('qualified_from_round', { ascending: false })
+        .limit(1);
+
+      if (anyQualified && anyQualified.length > 0) {
+        // Round HAS been evaluated and this team is NOT in qualified list → ELIMINATED!
+        const evaluatedRound = anyQualified[0].qualified_from_round;
+        console.log('[AccessControl] Round', evaluatedRound, 'evaluated - team NOT qualified → ELIMINATED');
+        
+        // Mark as PERMANENTLY eliminated
+        eliminationRef.current = {
+          eliminated: true,
+          round: evaluatedRound,
+        };
+        
+        // Persist to localStorage
+        try {
+          localStorage.setItem(
+            `eliminated_${teamId}`, 
+            JSON.stringify({ eliminated: true, round: evaluatedRound })
+          );
+        } catch (e) {
+          console.error('[AccessControl] localStorage error:', e);
+        }
+
         currentState.isEliminated = true;
         currentState.isQualified = false;
-        currentState.qualificationRound = eliminationRef.current.round;
-        
+        currentState.qualificationRound = evaluatedRound;
         setState(currentState);
         return;
       }
 
-      // Step 3: Get current round from round_state
-      const { data: roundStateData, error: roundError } = await supabase
-        .from('round_state')
-        .select('*')
-        .limit(1)
-        .single();
-
-      if (roundError) {
-        console.error('[AccessControl] Error fetching round state:', roundError);
-      }
-
-      // If no round state, default to round 1
-      const currentRound = roundStateData?.round_number || 1;
-      const currentStatus = roundStateData?.status || 'waiting';
-
-      console.log('[AccessControl] Current round:', currentRound, 'Status:', currentStatus);
-
-      // Step 4: CRITICAL LOGIC for Qualified vs Eliminated
-      // For rounds 2+, determine status based on qualified_teams table
-      if (currentRound > 1) {
-        const previousRound = currentRound - 1;
-
-        // Check if team is in qualified_teams for the PREVIOUS round
-        const { data: qualifiedData, error: qualifiedError } = await supabase
-          .from('qualified_teams')
-          .select('*')
-          .eq('team_id', teamId)
-          .eq('qualified_from_round', previousRound)
-          .maybeSingle();
-
-        if (qualifiedError) {
-          console.error('[AccessControl] Error fetching qualified teams:', qualifiedError);
-        }
-
-        if (qualifiedData) {
-          // Team IS in qualified_teams → QUALIFIED for this round
-          currentState.isQualified = true;
-          currentState.isEliminated = false;
-          currentState.qualificationRound = previousRound;
-          console.log('[AccessControl] Team IS qualified for round', previousRound);
-        } else {
-          // Team is NOT in qualified_teams → ELIMINATED (PERMANENT!)
-          // This happens when admin has selected the qualified teams
-          // and this team was not among them
-          
-          // Check if qualified_teams has ANY entries for previous round
-          // If yes, it means round was evaluated and this team didn't make it
-          const { data: qualifiedCount } = await supabase
-            .from('qualified_teams')
-            .select('id', { count: 'exact', head: true })
-            .eq('qualified_from_round', previousRound);
-
-          const hasQualifiedTeams = qualifiedCount && qualifiedCount.length > 0;
-
-          if (hasQualifiedTeams) {
-            // Round was evaluated and team was NOT qualified → ELIMINATED
-            eliminationRef.current = {
-              eliminated: true,
-              round: previousRound,
-            };
-            
-            // Persist to localStorage
-            try {
-              localStorage.setItem(
-                `eliminated_${teamId}`, 
-                JSON.stringify({ eliminated: true, round: previousRound })
-              );
-            } catch (e) {
-              console.error('[AccessControl] Error saving to localStorage:', e);
-            }
-
-            currentState.isEliminated = true;
-            currentState.isQualified = false;
-            currentState.qualificationRound = previousRound;
-            console.log('[AccessControl] Team is ELIMINATED from round', previousRound);
-          } else {
-            // No qualified teams yet → round not evaluated, no overlay
-            currentState.isEliminated = false;
-            currentState.isQualified = false;
-            currentState.qualificationRound = null;
-            console.log('[AccessControl] Round not yet evaluated');
-          }
-        }
-      } else {
-        // Round 1 - everyone starts fresh, no elimination
-        currentState.isEliminated = false;
-        currentState.isQualified = false;
-        currentState.qualificationRound = null;
-      }
-
-      // Update previous round ref
-      previousRoundRef.current = currentRound;
-
+      // No qualified teams yet - no overlay (everyone can play)
+      console.log('[AccessControl] No rounds evaluated yet - everyone can play');
+      currentState.isEliminated = false;
+      currentState.isQualified = false;
+      currentState.qualificationRound = null;
       setState(currentState);
 
     } catch (error) {
-      console.error('[AccessControl] Exception in checkTeamStatus:', error);
+      console.error('[AccessControl] Exception:', error);
       setState(prev => ({
         ...prev,
         isLoading: false,
@@ -207,11 +174,10 @@ export function useTeamAccessControl(session: TeamSession | null) {
     }
   }, [session]);
 
-  // Load persisted elimination state on mount
+  // Load persisted elimination from localStorage on mount
   useEffect(() => {
     if (!session) return;
 
-    // Load from localStorage
     try {
       const saved = localStorage.getItem(`eliminated_${session.teamId}`);
       if (saved) {
@@ -221,22 +187,23 @@ export function useTeamAccessControl(session: TeamSession | null) {
             eliminated: true,
             round: parsed.round,
           };
+          console.log('[AccessControl] Loaded persisted elimination for round', parsed.round);
         }
       }
     } catch (e) {
-      console.error('[AccessControl] Error loading from localStorage:', e);
+      console.error('[AccessControl] Error loading localStorage:', e);
     }
   }, [session]);
 
-  // Main useEffect for real-time subscriptions
+  // Main effect with real-time subscriptions
   useEffect(() => {
     if (!session) return;
 
     const teamId = session.teamId;
 
-    // Channel 1: Subscribe to teams table (for disqualification status)
+    // Channel 1: Teams table - for disqualification
     const teamsChannel = supabase
-      .channel('access_control_teams')
+      .channel('access_teams')
       .on(
         'postgres_changes',
         {
@@ -246,8 +213,7 @@ export function useTeamAccessControl(session: TeamSession | null) {
           filter: `team_id=eq.${teamId}`,
         },
         (payload) => {
-          console.log('[AccessControl] Teams table updated:', payload.new);
-          
+          console.log('[AccessControl] Teams updated:', payload);
           const newStatus = (payload.new as { status?: string })?.status;
           
           if (newStatus === 'disqualified') {
@@ -256,46 +222,41 @@ export function useTeamAccessControl(session: TeamSession | null) {
               isDisqualified: true,
               isEliminated: false,
               isQualified: false,
-              qualificationRound: null,
-              isLoading: false,
             }));
           } else if (newStatus === 'active' || newStatus === null) {
-            // Disqualification was LIFTED - re-qualify for current round
-            // Clear elimination state and re-check
+            // Disqualification lifted - re-check
             eliminationRef.current = { eliminated: false, round: null };
             try {
               localStorage.removeItem(`eliminated_${teamId}`);
             } catch (e) {}
-            
             checkTeamStatus();
           }
         }
       )
       .subscribe();
 
-    // Channel 2: Subscribe to qualified_teams table - THIS IS THE KEY!
-    // When admin adds qualified teams, ALL other teams should see Eliminated overlay
-    const qualifiedTeamsChannel = supabase
-      .channel('access_control_qualified_teams')
+    // Channel 2: qualified_teams table - THE KEY TRIGGER
+    // When admin adds teams to qualified_teams, ALL teams check their status
+    const qualifiedChannel = supabase
+      .channel('access_qualified')
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen for INSERT (when admin adds qualified teams)
+          event: '*', // INSERT, DELETE, UPDATE
           schema: 'public',
           table: 'qualified_teams',
         },
         (payload) => {
-          console.log('[AccessControl] Qualified teams changed:', payload);
-          // IMMEDIATELY re-check status when qualified_teams changes
-          // This will trigger elimination for all teams NOT in qualified_teams
+          console.log('[AccessControl] qualified_teams changed:', payload);
+          // IMMEDIATELY re-check status
           checkTeamStatus();
         }
       )
       .subscribe();
 
-    // Channel 3: Subscribe to round_state (for round changes)
-    const roundStateChannel = supabase
-      .channel('access_control_round_state')
+    // Channel 3: round_state - for round changes
+    const roundChannel = supabase
+      .channel('access_round')
       .on(
         'postgres_changes',
         {
@@ -304,34 +265,31 @@ export function useTeamAccessControl(session: TeamSession | null) {
           table: 'round_state',
         },
         (payload) => {
-          console.log('[AccessControl] Round state changed:', payload);
+          console.log('[AccessControl] round_state changed:', payload);
           checkTeamStatus();
         }
       )
       .subscribe();
 
-    // Initial check
-    checkTeamStatus();
+    // Initial check after a small delay to ensure subscriptions are ready
+    const timer = setTimeout(() => {
+      checkTeamStatus();
+      isInitialCheckDone.current = true;
+    }, 500);
 
-    // Cleanup subscriptions
     return () => {
+      clearTimeout(timer);
       supabase.removeChannel(teamsChannel);
-      supabase.removeChannel(qualifiedTeamsChannel);
-      supabase.removeChannel(roundStateChannel);
+      supabase.removeChannel(qualifiedChannel);
+      supabase.removeChannel(roundChannel);
     };
   }, [session, checkTeamStatus]);
 
-  /**
-   * Manually refresh the access control state
-   */
   const refreshStatus = useCallback(() => {
     checkTeamStatus();
   }, [checkTeamStatus]);
 
-  /**
-   * Clear qualified status (call when new round actually starts)
-   * Note: This does NOT clear elimination - once eliminated, always eliminated
-   */
+  // Clear qualified status (not elimination - that's permanent!)
   const clearQualifiedStatus = useCallback(() => {
     setState(prev => ({
       ...prev,
