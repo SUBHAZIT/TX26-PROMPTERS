@@ -58,38 +58,63 @@ const Competition = () => {
     play();
   }, [play]);
 
-  // Check elimination status when rounds complete
+  // Real-time subscription for qualified_teams changes - auto refresh elimination status
   useEffect(() => {
     if (!session) return;
+    
+    const channel = supabase
+      .channel('competition_qualified_teams')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'qualified_teams' 
+      }, () => {
+        // Refetch elimination status when qualified_teams changes
+        checkEliminationStatus();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [session]);
+
+  // Check elimination status function - extracted for reusability
+  const checkEliminationStatus = useCallback(async () => {
+    if (!session) return;
+    
     const completedRounds = rounds.filter(r => r.status === 'completed');
     if (completedRounds.length === 0) return;
 
     const lastCompleted = completedRounds[completedRounds.length - 1];
+    const nextRound = rounds.find(r => r.round_number === lastCompleted.round_number + 1);
     
-    supabase.from('qualified_teams')
-      .select('*')
-      .eq('team_id', session.teamId)
-      .eq('qualified_from_round', lastCompleted.round_number)
-      .maybeSingle()
-      .then(({ data }) => {
-        const nextRound = rounds.find(r => r.round_number === lastCompleted.round_number + 1);
-        if (!nextRound || nextRound.status === 'pending') {
-          if (data) {
-            setEliminationState({ eliminated: false, qualified: true, round: lastCompleted.round_number });
-          } else {
-            supabase.from('qualified_teams')
-              .select('id')
-              .eq('qualified_from_round', lastCompleted.round_number)
-              .limit(1)
-              .then(({ data: anyQualified }) => {
-                if (anyQualified && anyQualified.length > 0) {
-                  setEliminationState({ eliminated: true, qualified: false, round: lastCompleted.round_number });
-                }
-              });
-          }
+    // Only show elimination if next round is pending (not started yet)
+    if (!nextRound || nextRound.status === 'pending') {
+      const { data: qualified } = await supabase.from('qualified_teams')
+        .select('*')
+        .eq('team_id', session.teamId)
+        .eq('qualified_from_round', lastCompleted.round_number)
+        .maybeSingle();
+
+      if (qualified) {
+        setEliminationState({ eliminated: false, qualified: true, round: lastCompleted.round_number });
+      } else {
+        // Check if there are any qualified teams (to confirm round was evaluated)
+        const { data: anyQualified } = await supabase.from('qualified_teams')
+          .select('id')
+          .eq('qualified_from_round', lastCompleted.round_number)
+          .limit(1);
+          
+        if (anyQualified && anyQualified.length > 0) {
+          setEliminationState({ eliminated: true, qualified: false, round: lastCompleted.round_number });
         }
-      });
+      }
+    }
   }, [session, rounds]);
+
+  // Check elimination status when rounds complete
+  useEffect(() => {
+    checkEliminationStatus();
+  }, [rounds, checkEliminationStatus]);
 
   // Clear elimination when new round starts
   useEffect(() => {

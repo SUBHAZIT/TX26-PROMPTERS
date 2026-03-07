@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Shield, Users, HelpCircle, Play, Square, Eye, Download, Trash2, Plus, Trophy, AlertTriangle, LogOut, CheckCircle, XCircle, Image, RotateCcw, UserCheck, UserX } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Shield, Users, HelpCircle, Play, Square, Eye, Download, Trash2, Plus, Trophy, AlertTriangle, LogOut, CheckCircle, XCircle, Image, RotateCcw, UserCheck, UserX, ChevronLeft, ChevronRight, Check, Clock } from 'lucide-react';
 import type { Json } from '@/integrations/supabase/types';
 
 const AdminDashboard = () => {
@@ -23,6 +24,16 @@ const AdminDashboard = () => {
   const [reviewRound, setReviewRound] = useState('1');
   const [reviewQuestion, setReviewQuestion] = useState('1');
   const [reviewSection, setReviewSection] = useState('ALL');
+
+  // New: Question round filter for adding questions
+  const [questionRoundFilter, setQuestionRoundFilter] = useState('1');
+  const [nextQuestionNumber, setNextQuestionNumber] = useState(1);
+
+  // New: Review popup state
+  const [reviewPopupOpen, setReviewPopupOpen] = useState(false);
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+  const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
+  const [reviewActionLoading, setReviewActionLoading] = useState(false);
 
   // New team form
   const [newTeamId, setNewTeamId] = useState('');
@@ -60,6 +71,62 @@ const AdminDashboard = () => {
     const interval = setInterval(fetchAll, 5000);
     return () => clearInterval(interval);
   }, [navigate]);
+
+  // Auto-update next question number when round filter changes
+  useEffect(() => {
+    const roundQuestions = questions.filter(q => q.round_number === Number(questionRoundFilter));
+    const maxQNum = roundQuestions.length > 0 ? Math.max(...roundQuestions.map(q => q.question_number)) : 0;
+    setNextQuestionNumber(maxQNum + 1);
+    setNewQ(prev => ({ ...prev, round_number: Number(questionRoundFilter), question_number: maxQNum + 1 }));
+  }, [questionRoundFilter, questions]);
+
+  // Open review popup
+  const openReviewPopup = (index: number) => {
+    setCurrentReviewIndex(index);
+    const sub = filteredSubs[index];
+    setCurrentReviewId(sub?.id || null);
+    setReviewPopupOpen(true);
+  };
+
+  // Handle accept/reject in popup
+  const handleReviewAction = async (approved: boolean) => {
+    if (!currentReviewId) return;
+    
+    setReviewActionLoading(true);
+    await supabase.from('submissions').update({ admin_approved: approved }).eq('id', currentReviewId);
+    await fetchAll();
+    setReviewActionLoading(false);
+    
+    // Move to next or close
+    if (currentReviewIndex < filteredSubs.length - 1) {
+      setCurrentReviewIndex(prev => prev + 1);
+      // Update the current review ID for the next item
+      const nextSub = filteredSubs[currentReviewIndex + 1];
+      setCurrentReviewId(nextSub?.id || null);
+    } else if (filteredSubs.length > 1) {
+      setCurrentReviewIndex(0);
+      const firstSub = filteredSubs[0];
+      setCurrentReviewId(firstSub?.id || null);
+    } else {
+      setReviewPopupOpen(false);
+      setCurrentReviewId(null);
+    }
+  };
+
+  // Navigate in popup
+  const goToPrevReview = () => {
+    const newIndex = Math.max(0, currentReviewIndex - 1);
+    setCurrentReviewIndex(newIndex);
+    const prevSub = filteredSubs[newIndex];
+    setCurrentReviewId(prevSub?.id || null);
+  };
+  
+  const goToNextReview = () => {
+    const newIndex = Math.min(filteredSubs.length - 1, currentReviewIndex + 1);
+    setCurrentReviewIndex(newIndex);
+    const nextSub = filteredSubs[newIndex];
+    setCurrentReviewId(nextSub?.id || null);
+  };
 
   // Team management
   const [teamError, setTeamError] = useState<string | null>(null);
@@ -418,15 +485,40 @@ const AdminDashboard = () => {
           <TabsContent value="questions">
             <div className="glass-panel p-6 mb-6">
               <h3 className="font-display text-sm uppercase tracking-wider text-primary mb-4">Add Question</h3>
+              
+              {/* Round Filter for Adding Questions */}
+              <div className="flex gap-3 mb-4">
+                <div>
+                  <label className="font-mono text-xs text-muted-foreground block mb-2">Select Round</label>
+                  <Select value={questionRoundFilter} onValueChange={setQuestionRoundFilter}>
+                    <SelectTrigger className="w-40 bg-secondary font-mono">
+                      <SelectValue placeholder="Select Round" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Round 1</SelectItem>
+                      <SelectItem value="2">Round 2</SelectItem>
+                      <SelectItem value="3">Round 3</SelectItem>
+                      <SelectItem value="4">Final Round</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-mono text-xs text-muted-foreground block mb-2">Question #</label>
+                  <Input 
+                    type="number" 
+                    value={newQ.question_number} 
+                    onChange={e => setNewQ({ ...newQ, question_number: Number(e.target.value) })} 
+                    className="bg-secondary font-mono w-24"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <span className="font-mono text-xs text-muted-foreground pb-2">
+                    {questions.filter(q => q.round_number === Number(questionRoundFilter)).length} questions in Round {questionRoundFilter}
+                  </span>
+                </div>
+              </div>
+              
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <Select value={String(newQ.round_number)} onValueChange={v => setNewQ({ ...newQ, round_number: Number(v) })}>
-                  <SelectTrigger className="bg-secondary font-mono"><SelectValue placeholder="Round" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">Round 1</SelectItem><SelectItem value="2">Round 2</SelectItem>
-                    <SelectItem value="3">Round 3</SelectItem><SelectItem value="4">Final Round</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input type="number" value={newQ.question_number} onChange={e => setNewQ({ ...newQ, question_number: Number(e.target.value) })} placeholder="Q#" className="bg-secondary font-mono" />
                 <Select value={newQ.question_type} onValueChange={v => setNewQ({ ...newQ, question_type: v })}>
                   <SelectTrigger className="bg-secondary font-mono"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -570,8 +662,9 @@ const AdminDashboard = () => {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {filteredSubs.map(sub => {
+            {/* Grid view with team name + view icon */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+              {filteredSubs.map((sub, index) => {
                 const team = teams.find(t => t.team_id === sub.team_id);
                 return (
                   <motion.div
@@ -579,16 +672,25 @@ const AdminDashboard = () => {
                     className={`glass-panel p-4 rounded-xl cursor-pointer transition-all ${
                       sub.admin_approved ? 'ring-2 ring-primary neon-box-glow' : 'border border-border/30'
                     }`}
-                    onClick={() => toggleApproval(sub.id, sub.admin_approved)}
+                    onClick={() => openReviewPopup(index)}
                     whileHover={{ scale: 1.02 }}
                   >
-                    <img src={sub.image_url} alt="Submission" className="w-full h-40 object-cover rounded-lg mb-3" />
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <p className="font-mono text-sm font-bold">{sub.team_id}</p>
-                        <span className="font-mono text-xs text-muted-foreground">{team?.section}</span>
+                    {/* Team Name - Primary Display */}
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-mono text-sm font-bold truncate">{sub.team_id}</p>
+                      <span className="font-mono text-xs text-muted-foreground">{team?.section}</span>
+                    </div>
+                    
+                    {/* View Upload Icon */}
+                    <div className="w-full h-24 bg-secondary/50 rounded-lg flex items-center justify-center mb-2">
+                      <div className="text-center">
+                        <Image className="w-8 h-8 text-muted-foreground mx-auto mb-1" />
+                        <span className="font-mono text-xs text-muted-foreground">View Upload</span>
                       </div>
-                      {sub.answer && <p className="font-mono text-xs text-muted-foreground truncate" title={sub.answer}>Prompt: {sub.answer}</p>}
+                    </div>
+                    
+                    {/* Status */}
+                    <div className="flex items-center justify-between">
                       <p className="font-mono text-xs text-muted-foreground">{new Date(sub.submitted_at).toLocaleTimeString()}</p>
                       {sub.admin_approved ? (
                         <span className="inline-flex items-center gap-1 font-mono text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">
@@ -596,7 +698,7 @@ const AdminDashboard = () => {
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
-                          <XCircle className="w-3 h-3" /> Click to approve
+                          <XCircle className="w-3 h-3" /> Pending
                         </span>
                       )}
                     </div>
@@ -609,6 +711,120 @@ const AdminDashboard = () => {
                 </div>
               )}
             </div>
+
+            {/* Review Popup Dialog */}
+            <Dialog open={reviewPopupOpen} onOpenChange={(open) => {
+              setReviewPopupOpen(open);
+              if (!open) setCurrentReviewId(null);
+            }}>
+              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle className="font-display text-xl">
+                    Review Submission - {filteredSubs[currentReviewIndex]?.team_id}
+                  </DialogTitle>
+                  <DialogDescription>
+                    Round {reviewRound} • Question {reviewQuestion} • {teams.find(t => t.team_id === filteredSubs[currentReviewIndex]?.team_id)?.section}
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <div className="space-y-4">
+                  {/* Images Comparison */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Given Image */}
+                    <div className="space-y-2">
+                      <p className="font-mono text-xs text-muted-foreground uppercase tracking-wider">Given Image</p>
+                      <div className="aspect-square bg-secondary rounded-lg overflow-hidden flex items-center justify-center">
+                        {(() => {
+                          const question = questions.find(q => 
+                            q.round_number === Number(reviewRound) && 
+                            q.question_number === Number(reviewQuestion)
+                          );
+                          return question?.image_url ? (
+                            <img 
+                              src={question.image_url} 
+                              alt="Given" 
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <p className="font-mono text-xs text-muted-foreground">No image for this question</p>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                    
+                    {/* Uploaded Image */}
+                    <div className="space-y-2">
+                      <p className="font-mono text-xs text-muted-foreground uppercase tracking-wider">Uploaded Submission</p>
+                      <div className="aspect-square bg-secondary rounded-lg overflow-hidden flex items-center justify-center">
+                        {filteredSubs[currentReviewIndex]?.image_url ? (
+                          <img 
+                            src={filteredSubs[currentReviewIndex].image_url} 
+                            alt="Submission" 
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <p className="font-mono text-xs text-muted-foreground">No image uploaded</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Submission Details */}
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-mono text-muted-foreground">
+                      Submitted: {filteredSubs[currentReviewIndex] ? new Date(filteredSubs[currentReviewIndex].submitted_at).toLocaleString() : ''}
+                    </span>
+                    <span className="font-mono text-muted-foreground">
+                      Prompt: {filteredSubs[currentReviewIndex]?.answer || 'N/A'}
+                    </span>
+                  </div>
+                  
+                  {/* Navigation & Actions */}
+                  <div className="flex items-center justify-between pt-4 border-t border-border">
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={goToPrevReview}
+                        disabled={currentReviewIndex === 0}
+                      >
+                        <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                      </Button>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {currentReviewIndex + 1} / {filteredSubs.length}
+                      </span>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={goToNextReview}
+                        disabled={currentReviewIndex === filteredSubs.length - 1}
+                      >
+                        Next <ChevronRight className="w-4 h-4 ml-1" />
+                      </Button>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="destructive" 
+                        onClick={() => handleReviewAction(false)}
+                        disabled={reviewActionLoading}
+                        className="gap-2"
+                      >
+                        <XCircle className="w-4 h-4" /> Reject
+                      </Button>
+                      <Button 
+                        variant="default"
+                        onClick={() => handleReviewAction(true)}
+                        disabled={reviewActionLoading}
+                        className="bg-primary gap-2"
+                      >
+                        <CheckCircle className="w-4 h-4" /> Accept
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           {/* WINNERS TAB - with manual add/remove and confirm */}
